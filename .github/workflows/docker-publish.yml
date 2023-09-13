@@ -1,0 +1,102 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      DOCKER_REGISTRY_HOST: ${{ secrets.DOCKER_REGISTRY_HOST }}
+      DOCKER_REGISTRY_PORT: ${{ secrets.DOCKER_REGISTRY_PORT }}
+      OPEN_DOCKER_REGISTRY_SEQ: ${{ secrets.OPEN_DOCKER_REGISTRY_SEQ }}
+      CLOSE_DOCKER_REGISTRY_SEQ: ${{ secrets.CLOSE_DOCKER_REGISTRY_SEQ }}
+    steps:
+      - name: Install dependencies
+        run: sudo apt-get install -y knockd
+
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Configure Docker to accept insecure registries
+        run: |
+          echo "{ \"insecure-registries\": [\"http://${DOCKER_REGISTRY_HOST}:${DOCKER_REGISTRY_PORT}\"] }" | sudo tee /etc/docker/daemon.json
+          sudo service docker restart
+
+      - name: Build Docker image
+        run: |
+          VERSION=$(jq -r .version package.json)
+          docker build -t ${DOCKER_REGISTRY_HOST}:${DOCKER_REGISTRY_PORT}/${GITHUB_REPOSITORY##*/}:${VERSION} .
+
+      - name: Open Registry
+        run: knock -d 10 ${DOCKER_REGISTRY_HOST} ${OPEN_DOCKER_REGISTRY_SEQ}
+
+      - name: Push Docker image
+        run: |
+          VERSION=$(jq -r .version package.json)
+          docker push ${DOCKER_REGISTRY_HOST}:${DOCKER_REGISTRY_PORT}/${GITHUB_REPOSITORY##*/}:${VERSION}
+
+      - name: Close Registry
+        run: knock -d 10 ${DOCKER_REGISTRY_HOST} ${CLOSE_DOCKER_REGISTRY_SEQ}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      DEPLOY_SERVICE_HOST: ${{ secrets.DEPLOY_SERVICE_HOST }}
+      DEPLOY_SERVICE_PORT: ${{ secrets.DEPLOY_SERVICE_PORT }}
+      OPEN_DEPLOY_SERVICE_SEQ: ${{ secrets.OPEN_DEPLOY_SERVICE_SEQ }}
+      CLOSE_DEPLOY_SERVICE_SEQ: ${{ secrets.CLOSE_DEPLOY_SERVICE_SEQ }}
+      SERVICE_PORT: ${{ secrets.SERVICE_PORT }}
+      SERVER_NAME: ${{ secrets.SERVER_NAME }}
+    steps:
+      - name: Install dependencies
+        run: sudo apt-get install -y jq knockd
+
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Open Deploy Service
+        run: knock -d 10 ${DEPLOY_SERVICE_HOST} ${OPEN_DEPLOY_SERVICE_SEQ}
+
+      - name: Launch deploy
+        run: |
+          VERSION=$(jq -r .version package.json)
+          JSON_BODY='{
+            "image_name":"'${GITHUB_REPOSITORY##*/}:${VERSION}'",
+            "app_name":"'${GITHUB_REPOSITORY##*/}'",
+            "service_port":"'${SERVICE_PORT}'",
+            "proxy_container_name":"dmz",
+            "server_name":"'${SERVER_NAME}'",
+            "operation": "replace",
+            "amount": 1
+          }'
+          echo ${JSON_BODY} > request.json
+          curl -X POST -H "Content-Type: application/json" -d @request.json http://${DEPLOY_SERVICE_HOST}:${DEPLOY_SERVICE_PORT}/deploy
+
+      - name: Close Deploy Service
+        run: knock -d 10 ${DEPLOY_SERVICE_HOST} ${CLOSE_DEPLOY_SERVICE_SEQ}
+  increment-version:
+    needs: deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Increment patch
+        run: |
+          CURRENT_VERSION=$(jq -r .version package.json)
+          NEW_VERSION=$(npx semver -i patch $CURRENT_VERSION)
+
+          jq ".version = \"$NEW_VERSION\"" package.json > package.json.tmp
+          mv package.json.tmp package.json
+        continue-on-error: true
+
+      - uses: stefanzweifel/git-auto-commit-action@v4
+        with:
+          file_pattern: package.json
+          commit_message: Se incrementa el patch de version [ci skip]
