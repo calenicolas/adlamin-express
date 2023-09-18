@@ -78,6 +78,7 @@ jobs:
 
       - name: Close Deploy Service
         run: knock -d 10 ${DEPLOY_SERVICE_HOST} ${CLOSE_DEPLOY_SERVICE_SEQ}
+
   increment-version:
     needs: deploy
     runs-on: ubuntu-latest
