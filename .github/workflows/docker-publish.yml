@@ -66,11 +66,12 @@ jobs:
           VERSION=$(jq -r .version package.json)
           JSON_BODY='{
             "image_name":"'${GITHUB_REPOSITORY##*/}:${VERSION}'",
-            "app_name":"'${GITHUB_REPOSITORY##*/}'",
+            "app_name":"internal-'${GITHUB_REPOSITORY##*/}'",
             "service_port":"'${SERVICE_PORT}'",
             "proxy_container_name":"dmz",
             "server_name":"'${SERVER_NAME}'",
             "operation": "replace",
+            "internal": true,
             "amount": 1
           }'
           echo ${JSON_BODY} > request.json
